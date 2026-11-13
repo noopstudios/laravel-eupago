@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="vendor/autoload.php"
+         colors="true"
+         cacheDirectory=".phpunit.cache">
+    <testsuites>
+        <testsuite name="Unit">
+            <directory>tests/Unit</directory>
+        </testsuite>
+        <testsuite name="Feature">
+            <directory>tests/Feature</directory>
+        </testsuite>
+        <testsuite name="Integration">
+            <directory>tests/Integration</directory>
+        </testsuite>
+    </testsuites>
+    <groups>
+        <exclude>
+            <group>sandbox</group>
+        </exclude>
+    </groups>
+    <php>
+        <env name="EUPAGO_API_KEY" value="fake-api-key" force="true"/>
+        <env name="EUPAGO_WEBHOOK_SECRET" value="fake-webhook-secret" force="true"/>
+        <env name="EUPAGO_SANDBOX" value="true" force="true"/>
+        <env name="EUPAGO_PREFIX" value="TEST" force="true"/>
+        <server name="EUPAGO_API_KEY" value="fake-api-key"/>
+        <server name="EUPAGO_WEBHOOK_SECRET" value="fake-webhook-secret"/>
+        <server name="EUPAGO_SANDBOX" value="true"/>
+        <server name="EUPAGO_PREFIX" value="TEST"/>
+    </php>
+    <source>
+        <include>
+            <directory>src</directory>
+        </include>
+    </source>
+</phpunit>
