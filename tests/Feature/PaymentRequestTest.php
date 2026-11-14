@@ -93,7 +93,51 @@ it('leaves the attempt unknown when the response is lost and blocks the next req
     'server error' => fn () => Http::response(['sucesso' => true], 500),
     'unreadable body' => fn () => Http::response('<html>Bad gateway</html>', 200),
     'incomplete body' => fn () => Http::response(['sucesso' => true, 'transactionStatus' => 'Success'], 200),
+    'redirect, never followed' => fn () => Http::response('', 307, ['Location' => 'https://elsewhere.test/create']),
 ]);
+
+it('leaves the attempt unknown, without leaking, when the send fails with an unexpected error', function (string $method) {
+    $calls = 0;
+    Http::fake(['*' => function () use (&$calls) {
+        $calls++;
+
+        throw new RuntimeException('boom fake-api-key 912345678');
+    }]);
+
+    $failure = failure(fn () => requestPayment($method, Order::create()));
+
+    expect($failure->type)->toBe(FailureType::Unknown)
+        ->and($failure->getPrevious())->toBeNull()
+        ->and($failure->getMessage())->not->toContain('boom')
+        ->and($failure->attempt?->fresh()?->status)->toBe(AttemptStatus::Unknown)
+        ->and($failure->attempt?->fresh()?->error_message)->toBe($failure->getMessage())
+        ->and($calls)->toBe(1);
+})->with('methods');
+
+it('has the attempt stored as creating before EuPago is called', function (string $method) {
+    $seen = [];
+    Http::fake(['*' => function () use (&$seen, $method) {
+        $seen[] = PaymentAttempt::query()->value('status');
+
+        return $method === 'multibanco' ? multibancoOk() : mbwayOk();
+    }]);
+
+    requestPayment($method, Order::create());
+
+    expect($seen)->toBe([AttemptStatus::Creating]);
+})->with('methods');
+
+it('does not reuse an expired pending Multibanco reference', function () {
+    Http::fake(['*' => multibancoOk('800000009')]);
+    $order = Order::create();
+    $expired = PaymentAttempt::factory()->for($order, 'payable')->create(['amount_cents' => 1234, 'expires_at' => now()->subMinute()]);
+
+    $attempt = Eupago::multibanco($order, 1234);
+
+    expect($attempt->id)->not->toBe($expired->id)
+        ->and($attempt->reference)->toBe('800000009');
+    Http::assertSentCount(1);
+});
 
 it('marks an explicit refusal as failed without blocking the next request or leaking secrets', function (string $method, PromiseInterface $refusal, PromiseInterface $success) {
     Http::fake(['*' => Http::sequence()->pushResponse($refusal)->whenEmpty($success)]);
@@ -119,7 +163,9 @@ it('blocks once the payable reached max_attempts', function () {
     config(['eupago.max_attempts' => 2]);
     Http::fake();
     $order = Order::create();
-    PaymentAttempt::factory()->for($order, 'payable')->status(AttemptStatus::Failed)->count(2)->create();
+    // Refusals that never produced a reference do not count.
+    PaymentAttempt::factory()->for($order, 'payable')->status(AttemptStatus::Failed)->count(3)->create(['reference' => null]);
+    PaymentAttempt::factory()->for($order, 'payable')->status(AttemptStatus::Expired)->count(2)->create();
 
     expect(failure(fn () => Eupago::multibanco($order, 1234))->type)->toBe(FailureType::Blocked);
     Http::assertNothingSent();

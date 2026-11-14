@@ -9,12 +9,14 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
+use LogicException;
 use Noop\Eupago\Enums\AttemptStatus;
 use Noop\Eupago\Enums\FailureType;
 use Noop\Eupago\Enums\PaymentMethod;
 use Noop\Eupago\Exceptions\EupagoException;
 use Noop\Eupago\Models\PaymentAttempt;
 use SensitiveParameter;
+use Throwable;
 
 /**
  * Requests Multibanco references and MB WAY payments for a payable. Returns the attempt only once it
@@ -73,6 +75,12 @@ class Eupago
      */
     private function request(Model $payable, PaymentMethod $method, int $amountCents, DateTimeInterface $expiresAt, Closure $send): PaymentAttempt
     {
+        // A caller's rollback would erase the creating/unknown row that prevents a second payable reference.
+        // Tests are exempt because RefreshDatabase wraps application tests in a transaction.
+        if ((new PaymentAttempt)->getConnection()->transactionLevel() > 0 && ! app()->runningUnitTests()) {
+            throw new LogicException('Eupago requests must not run inside a database transaction: a rollback would erase the attempt record and allow a duplicate payable reference.');
+        }
+
         try {
             return Cache::lock("eupago:payable:{$payable->getMorphClass()}:{$payable->getKey()}", 30)
                 ->block(10, fn () => $this->locked($payable, $method, $amountCents, $expiresAt, $send));
@@ -106,7 +114,12 @@ class Eupago
             }
         }
 
-        if ($this->attempts($payable)->count() >= (int) config('eupago.max_attempts')) {
+        // Explicit refusals that never produced a reference (wrong key, mistyped phone) do not use up attempts.
+        $counted = $this->attempts($payable)->where(
+            fn (Builder $query) => $query->where('status', '!=', AttemptStatus::Failed)->orWhereNotNull('reference')
+        );
+
+        if ($counted->count() >= (int) config('eupago.max_attempts')) {
             throw new EupagoException('This payable reached the maximum number of payment attempts.', FailureType::Blocked);
         }
 
@@ -131,6 +144,12 @@ class Eupago
             ]);
 
             throw new EupagoException($e->getMessage(), $e->type, $attempt);
+        } catch (Throwable) {
+            // Not chained and not echoed: the original could carry the request body or the API key.
+            $message = 'The payment request failed unexpectedly; a payable reference may exist.';
+            $attempt->update(['status' => AttemptStatus::Unknown, 'error_message' => $message]);
+
+            throw new EupagoException($message, FailureType::Unknown, $attempt);
         }
 
         $attempt->update([

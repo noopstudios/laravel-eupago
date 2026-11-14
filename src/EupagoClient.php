@@ -95,7 +95,7 @@ class EupagoClient
     private function send(string $method, callable $request): Response
     {
         try {
-            return $request(Http::acceptJson()->asJson()->connectTimeout(5)->timeout(15));
+            return $request(Http::acceptJson()->asJson()->withoutRedirecting()->connectTimeout(5)->timeout(15));
         } catch (ConnectionException) {
             // Covers timeouts too: the request may have reached EuPago and created a reference.
             throw $this->unknown($method);
