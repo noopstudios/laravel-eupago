@@ -18,11 +18,13 @@ return new class extends Migration
             $table->string('reference')->nullable();
             $table->string('transaction_id')->nullable();
             $table->string('trid')->nullable();
-            $table->string('status')->index();
-            $table->timestamp('expires_at')->index();
+            $table->string('status');
+            $table->timestamp('expires_at');
             $table->timestamp('paid_at')->nullable();
             $table->text('error_message')->nullable();
             $table->timestamps();
+
+            $table->index(['status', 'expires_at']);
         });
     }
 
