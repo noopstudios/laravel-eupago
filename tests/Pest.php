@@ -5,8 +5,10 @@ use Noop\Eupago\Models\PaymentAttempt;
 use Noop\Eupago\Tests\Fixtures\Order;
 use Noop\Eupago\Tests\Fixtures\RecordingHandler;
 use Noop\Eupago\Tests\TestCase;
+use Noop\Eupago\Tests\WithoutFilamentTestCase;
 
 pest()->extend(TestCase::class)->in('Feature', 'Unit');
+pest()->extend(WithoutFilamentTestCase::class)->in('WithoutFilament');
 // Real calls to the EuPago sandbox: run only with --group=sandbox (see tests/Integration/SandboxTest.php).
 pest()->extend(TestCase::class)->group('sandbox')->in('Integration');
 
