@@ -17,5 +17,5 @@ Todas as alterações relevantes deste pacote ficam documentadas aqui. O formato
 
 ### Notas
 
-- O formato da assinatura do webhook segue a documentação do EuPago e o plugin oficial; falta confirmá-lo com uma entrega real. As entregas recusadas por assinatura ficam registadas como warning.
+- O formato da assinatura do webhook foi confirmado com uma entrega real na sandbox do EuPago. As entregas recusadas por assinatura ficam registadas como warning.
 - Requisitos: PHP `^8.3`, Laravel `^13.0`; Filament `^5.0` só para o painel. Licença MIT.

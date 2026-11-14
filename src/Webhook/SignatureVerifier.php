@@ -6,8 +6,7 @@ use SensitiveParameter;
 
 /**
  * Webhooks 2.0 signature: the X-Signature header is the base64 of the HMAC-SHA256 of the raw body,
- * keyed with the channel's cryptographic key as is. This follows EuPago's documentation and its
- * official WooCommerce plugin; it is still pending confirmation against real deliveries.
+ * keyed with the channel's cryptographic key as is. Confirmed against a real sandbox delivery.
  */
 class SignatureVerifier
 {

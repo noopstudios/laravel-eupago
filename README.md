@@ -123,7 +123,7 @@ No backoffice do EuPago, no canal, em **Webhooks 2.0**:
 
 Verificação: o cabeçalho `X-Signature` é o HMAC-SHA256 do corpo bruto, com essa chave, em base64. Respostas: `200` (guardado, ou duplicado), `401` assinatura inválida, `422` corpo assinado sem `identifier` ou `status`, `503` segredo não configurado. O mesmo corpo é guardado uma só vez, por isso reenvios são inofensivos; o EuPago volta a tentar durante 24 h.
 
-> **Nota:** o formato da assinatura segue a documentação do EuPago e o plugin oficial. Enquanto não for confirmado com uma entrega real na tua conta, verifica o primeiro webhook (na lista de eventos ou nos logs) depois de ires para produção. Uma entrega recusada por assinatura inválida ou em falta fica registada nos logs como warning (sem o corpo nem a assinatura).
+> **Nota:** o formato da assinatura foi confirmado com uma entrega real na sandbox do EuPago. Uma entrega recusada por assinatura inválida ou em falta fica registada nos logs como warning (sem o corpo nem a assinatura).
 
 Estados de um evento, úteis para quem opera:
 
