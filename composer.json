@@ -39,7 +39,10 @@
         "laravel": {
             "providers": [
                 "Noop\\Eupago\\EupagoServiceProvider"
-            ]
+            ],
+            "aliases": {
+                "Eupago": "Noop\\Eupago\\Facades\\Eupago"
+            }
         }
     },
     "config": {

@@ -9,6 +9,9 @@ class EupagoServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__.'/../config/eupago.php', 'eupago');
+
+        $this->app->singleton(EupagoClient::class);
+        $this->app->singleton(Eupago::class);
     }
 
     public function boot(): void
