@@ -142,7 +142,7 @@ class Eupago
         try {
             $result = $send($attempt);
         } catch (EupagoException $e) {
-            $attempt->update([
+            $this->settle($attempt, [AttemptStatus::Creating], [
                 'status' => $e->type === FailureType::Rejected ? AttemptStatus::Failed : AttemptStatus::Unknown,
                 'error_message' => $e->getMessage(),
             ]);
@@ -151,19 +151,34 @@ class Eupago
         } catch (Throwable) {
             // Not chained and not echoed: the original could carry the request body or the API key.
             $message = 'The payment request failed unexpectedly; a payable reference may exist.';
-            $attempt->update(['status' => AttemptStatus::Unknown, 'error_message' => $message]);
+            $this->settle($attempt, [AttemptStatus::Creating], ['status' => AttemptStatus::Unknown, 'error_message' => $message]);
 
             throw new EupagoException($message, FailureType::Unknown, $attempt);
         }
 
-        $attempt->update([
+        // Also from unknown: eupago:recover may have given up on a request that was only slow.
+        $this->settle($attempt, [AttemptStatus::Creating, AttemptStatus::Unknown], [
             'status' => AttemptStatus::Pending,
             'entity' => $result['entity'],
             'reference' => $result['reference'],
             'transaction_id' => $result['transaction_id'],
+            'error_message' => null,
         ]);
 
         return $attempt;
+    }
+
+    /**
+     * Applies the outcome of the request only while the attempt is still in one of $from: a request
+     * that took long may have been resolved meanwhile (eupago:recover, a webhook). Refreshes the attempt.
+     *
+     * @param  list<AttemptStatus>  $from
+     * @param  array<string, mixed>  $values
+     */
+    private function settle(PaymentAttempt $attempt, array $from, array $values): void
+    {
+        PaymentAttempt::query()->whereKey($attempt->id)->whereIn('status', $from)->update($values);
+        $attempt->refresh();
     }
 
     /**

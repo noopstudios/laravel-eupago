@@ -32,13 +32,20 @@ function grantEupago(string ...$keys): void
     }
 }
 
-it('forbids both resources without the view permissions', function () {
+it('forbids both resources and their view pages without the view permissions', function () {
+    $attempt = PaymentAttemptResource::getUrl('view', ['record' => attempt()]);
+    $event = PaymentWebhookEventResource::getUrl('view', ['record' => PaymentWebhookEvent::factory()->create()]);
+
     get(PaymentAttemptResource::getUrl('index'))->assertForbidden();
     get(PaymentWebhookEventResource::getUrl('index'))->assertForbidden();
+    get($attempt)->assertForbidden();
+    get($event)->assertForbidden();
 
     grantEupago('view_attempts', 'view_events');
     get(PaymentAttemptResource::getUrl('index'))->assertOk();
     get(PaymentWebhookEventResource::getUrl('index'))->assertOk();
+    get($attempt)->assertOk();
+    get($event)->assertOk();
 
     // An unset permission grants nothing, whatever the Gate says about the default name.
     config(['eupago.permissions.view_attempts' => null]);

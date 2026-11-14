@@ -9,17 +9,22 @@ use Noop\Eupago\Models\PaymentWebhookEvent;
 
 beforeEach(fn () => handler());
 
-it('expires only the open attempts past their expiry, once', function () {
-    $pending = attempt(['expires_at' => now()->subMinute()]);
-    $unknown = attempt(['status' => AttemptStatus::Unknown, 'expires_at' => now()->subMinute()]);
+it('expires only the open attempts past their expiry and grace, without a pending webhook event, once', function () {
+    $pending = attempt(['expires_at' => now()->subMinutes(3)]);
+    $unknown = attempt(['status' => AttemptStatus::Unknown, 'expires_at' => now()->subMinutes(3)]);
+    $inGrace = attempt(['expires_at' => now()->subMinute()]);
+    $awaiting = attempt(['expires_at' => now()->subMinutes(3)]);
+    PaymentWebhookEvent::factory()->create(['identifier' => $awaiting->identifier]);
     $current = attempt(['expires_at' => now()->addMinute()]);
-    $paid = attempt(['status' => AttemptStatus::Paid, 'expires_at' => now()->subMinute()]);
+    $paid = attempt(['status' => AttemptStatus::Paid, 'expires_at' => now()->subMinutes(3)]);
 
     expect(Artisan::call('eupago:expire'))->toBe(0)
         ->and(Artisan::call('eupago:expire'))->toBe(0);
 
     expect($pending->refresh()->status)->toBe(AttemptStatus::Expired)
         ->and($unknown->refresh()->status)->toBe(AttemptStatus::Expired)
+        ->and($inGrace->refresh()->status)->toBe(AttemptStatus::Pending)
+        ->and($awaiting->refresh()->status)->toBe(AttemptStatus::Pending)
         ->and($current->refresh()->status)->toBe(AttemptStatus::Pending)
         ->and($paid->refresh()->status)->toBe(AttemptStatus::Paid)
         ->and(handler()->expired)->toBe([$pending->id, $unknown->id]);

@@ -127,6 +127,17 @@ it('has the attempt stored as creating before EuPago is called', function (strin
     expect($seen)->toBe([AttemptStatus::Creating]);
 })->with('methods');
 
+it('keeps an attempt that was paid while its request was still running', function () {
+    Http::fake(['*' => function () {
+        PaymentAttempt::query()->update(['status' => AttemptStatus::Paid]);
+
+        return multibancoOk();
+    }]);
+
+    expect(Eupago::multibanco(Order::create(), 1234)->status)->toBe(AttemptStatus::Paid)
+        ->and(PaymentAttempt::sole()->status)->toBe(AttemptStatus::Paid);
+});
+
 it('does not reuse an expired pending Multibanco reference', function () {
     Http::fake(['*' => multibancoOk('800000009')]);
     $order = Order::create();

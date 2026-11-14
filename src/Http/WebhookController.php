@@ -4,6 +4,7 @@ namespace Noop\Eupago\Http;
 
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Support\Facades\Log;
 use Noop\Eupago\Enums\EventStatus;
 use Noop\Eupago\Jobs\ProcessWebhookEvent;
 use Noop\Eupago\Models\PaymentWebhookEvent;
@@ -26,6 +27,9 @@ class WebhookController
         $body = $request->getContent();
 
         if (! $verifier->verify($body, $request->header('X-Signature'), $secret)) {
+            // No context: the body, the header and the secret stay out of the logs.
+            Log::warning('EuPago webhook refused: invalid or missing signature.');
+
             return response('', 401);
         }
 

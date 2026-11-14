@@ -3,6 +3,7 @@
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Exceptions;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Testing\TestResponse;
 use Noop\Eupago\Contracts\HandlesEupagoPayments;
 use Noop\Eupago\Enums\AttemptStatus;
@@ -68,10 +69,13 @@ function storedEvent(PaymentAttempt $attempt, array $payload): PaymentWebhookEve
     return PaymentWebhookEvent::factory()->create(['identifier' => $attempt->identifier, 'payload' => $payload]);
 }
 
-it('refuses a delivery without a valid signature and stores nothing', function (?string $signature) {
+it('refuses a delivery without a valid signature, stores nothing and logs it without details', function (?string $signature) {
+    $log = Log::spy();
+
     deliverRaw(json_encode(payload(attempt()), JSON_THROW_ON_ERROR), $signature)->assertUnauthorized();
 
     expect(PaymentWebhookEvent::count())->toBe(0);
+    $log->shouldHaveReceived('warning')->once()->withArgs(fn (...$args) => $args === ['EuPago webhook refused: invalid or missing signature.']);
 })->with([
     'wrong' => base64_encode(str_repeat('x', 32)),
     'missing' => null,
@@ -158,7 +162,8 @@ it('marks the attempt paid without a transaction id, using the identifier downst
         ->and(handler()->received[0][1]->trid)->toBe($attempt->identifier);
 });
 
-it('keeps an already paid attempt when a second payment arrives, and notes it', function () {
+it('keeps an already paid attempt when a second payment arrives, and notes and reports it', function () {
+    Exceptions::fake();
     $attempt = attempt();
     deliver(payload($attempt))->assertOk();
 
@@ -169,6 +174,7 @@ it('keeps an already paid attempt when a second payment arrives, and notes it', 
         ->and($second?->error_message)->toBe('The attempt was already paid with a different transaction.')
         ->and($attempt->refresh()->trid)->toBe('7654321')
         ->and(handler()->received)->toHaveCount(1);
+    Exceptions::assertReported(fn (RuntimeException $e) => $e->getMessage() === "EuPago webhook event {$second?->id} needs review: {$second?->error_message}");
 });
 
 it('completes an unknown attempt with the reference from the payment', function () {
@@ -197,7 +203,7 @@ it('marks the attempt paid for review when the handler cannot receive it', funct
 });
 
 it('marks paid an unknown attempt that expired, with the reference from the payment', function () {
-    $attempt = attempt(['status' => AttemptStatus::Unknown, 'reference' => null, 'entity' => null, 'expires_at' => now()->subMinute()]);
+    $attempt = attempt(['status' => AttemptStatus::Unknown, 'reference' => null, 'entity' => null, 'expires_at' => now()->subMinutes(3)]);
     Artisan::call('eupago:expire');
     expect($attempt->refresh()->status)->toBe(AttemptStatus::Expired);
 

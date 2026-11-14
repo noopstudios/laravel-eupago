@@ -34,6 +34,8 @@ class ProcessWebhookEvent implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
+    private const SECOND_PAYMENT = 'The attempt was already paid with a different transaction.';
+
     public int $tries = 5;
 
     /** @var list<int> */
@@ -135,6 +137,11 @@ class ProcessWebhookEvent implements ShouldQueue
             // Money may have been received: tell someone. Only the event id and the generic reason.
             report(new RuntimeException("EuPago webhook event {$event->id} was rejected: {$note}"));
         }
+
+        if ($status === 'PAID' && $note === self::SECOND_PAYMENT) {
+            // A possible double payment: tell someone. Only the event id and the generic reason.
+            report(new RuntimeException("EuPago webhook event {$event->id} needs review: {$note}"));
+        }
     }
 
     /**
@@ -161,7 +168,7 @@ class ProcessWebhookEvent implements ShouldQueue
         }
 
         if ($attempt->status === AttemptStatus::Paid) {
-            return [EventStatus::Processed, $trid !== null && $trid !== $attempt->trid ? 'The attempt was already paid with a different transaction.' : null];
+            return [EventStatus::Processed, $trid !== null && $trid !== $attempt->trid ? self::SECOND_PAYMENT : null];
         }
 
         $attempt->reference ??= $reference;
