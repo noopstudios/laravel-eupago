@@ -114,9 +114,13 @@ class Eupago
             }
         }
 
-        // Explicit refusals that never produced a reference (wrong key, mistyped phone) do not use up attempts.
+        // Explicit refusals that never produced a reference (wrong key, mistyped phone) stop counting after
+        // 15 minutes, so a configuration mistake does not use up the payable forever; a burst of refused
+        // requests is still capped.
         $counted = $this->attempts($payable)->where(
-            fn (Builder $query) => $query->where('status', '!=', AttemptStatus::Failed)->orWhereNotNull('reference')
+            fn (Builder $query) => $query->where('status', '!=', AttemptStatus::Failed)
+                ->orWhereNotNull('reference')
+                ->orWhere('created_at', '>=', now()->subMinutes(15))
         );
 
         if ($counted->count() >= (int) config('eupago.max_attempts')) {

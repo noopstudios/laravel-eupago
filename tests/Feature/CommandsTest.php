@@ -29,9 +29,10 @@ it('marks stale creating attempts unknown and dispatches stale pending events ag
     Queue::fake();
     $stale = attempt(['status' => AttemptStatus::Creating, 'created_at' => now()->subMinutes(3)]);
     $recent = attempt(['status' => AttemptStatus::Creating]);
-    $lost = PaymentWebhookEvent::factory()->create(['created_at' => now()->subMinutes(6)]);
-    PaymentWebhookEvent::factory()->create();
-    PaymentWebhookEvent::factory()->status(EventStatus::Processed)->create(['created_at' => now()->subMinutes(6)]);
+    $lost = PaymentWebhookEvent::factory()->create(['created_at' => now()->subHour(), 'updated_at' => now()->subMinutes(16)]);
+    // Old, but its job failed recently and is waiting for its backoff.
+    PaymentWebhookEvent::factory()->create(['created_at' => now()->subHour(), 'updated_at' => now()->subMinutes(14)]);
+    PaymentWebhookEvent::factory()->status(EventStatus::Processed)->create(['created_at' => now()->subHour(), 'updated_at' => now()->subHour()]);
 
     expect(Artisan::call('eupago:recover'))->toBe(0);
 

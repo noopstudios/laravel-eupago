@@ -27,8 +27,8 @@ class EupagoServiceProvider extends ServiceProvider
         }
 
         $this->callAfterResolving(Schedule::class, function (Schedule $schedule) {
-            $schedule->command('eupago:expire')->everyMinute()->withoutOverlapping();
-            $schedule->command('eupago:recover')->everyFiveMinutes()->withoutOverlapping();
+            $schedule->command('eupago:expire')->everyMinute()->withoutOverlapping(10);
+            $schedule->command('eupago:recover')->everyFiveMinutes()->withoutOverlapping(10);
         });
 
         $this->publishes([

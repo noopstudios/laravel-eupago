@@ -1,7 +1,10 @@
 <?php
 
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Exceptions;
 use Illuminate\Testing\TestResponse;
+use Noop\Eupago\Contracts\HandlesEupagoPayments;
 use Noop\Eupago\Enums\AttemptStatus;
 use Noop\Eupago\Enums\EventStatus;
 use Noop\Eupago\Events\PaymentAttemptExpired;
@@ -65,14 +68,6 @@ function storedEvent(PaymentAttempt $attempt, array $payload): PaymentWebhookEve
     return PaymentWebhookEvent::factory()->create(['identifier' => $attempt->identifier, 'payload' => $payload]);
 }
 
-it('stores a correctly signed delivery', function () {
-    $attempt = attempt();
-
-    deliver(payload($attempt))->assertOk();
-
-    expect(PaymentWebhookEvent::sole()->identifier)->toBe($attempt->identifier);
-});
-
 it('refuses a delivery without a valid signature and stores nothing', function (?string $signature) {
     deliverRaw(json_encode(payload(attempt()), JSON_THROW_ON_ERROR), $signature)->assertUnauthorized();
 
@@ -108,6 +103,7 @@ it('processes a repeated delivery once', function () {
 
     $attempt->refresh();
     expect(PaymentWebhookEvent::sole()->status)->toBe(EventStatus::Processed)
+        ->and(PaymentWebhookEvent::sole()->identifier)->toBe($attempt->identifier)
         ->and($attempt->status)->toBe(AttemptStatus::Paid)
         ->and($attempt->trid)->toBe('7654321')
         ->and(handler()->received)->toHaveCount(1)
@@ -115,19 +111,65 @@ it('processes a repeated delivery once', function () {
     Event::assertDispatchedTimes(PaymentConfirmed::class, 1);
 });
 
-it('rejects a payment that does not match the attempt', function (array $overrides) {
+it('rejects and reports a payment that does not match the attempt', function (array $overrides) {
+    Exceptions::fake();
     $attempt = attempt();
 
     deliver(payload($attempt, $overrides))->assertOk();
 
-    expect(PaymentWebhookEvent::sole()->status)->toBe(EventStatus::Rejected)
+    $event = PaymentWebhookEvent::sole();
+    expect($event->status)->toBe(EventStatus::Rejected)
         ->and($attempt->refresh()->status)->toBe(AttemptStatus::Pending)
+        ->and($attempt->trid)->toBeNull()
         ->and(handler()->received)->toBe([]);
+    Exceptions::assertReported(fn (RuntimeException $e) => $e->getMessage() === "EuPago webhook event {$event->id} was rejected: {$event->error_message}");
 })->with([
     'amount' => [['amount' => ['value' => '12.51', 'currency' => 'EUR']]],
+    'amount with three significant decimals' => [['amount' => ['value' => '12.505', 'currency' => 'EUR']]],
+    'amount with a decimal comma' => [['amount' => ['value' => '12,50', 'currency' => 'EUR']]],
+    'missing amount' => [['amount' => null]],
     'reference' => [['reference' => '999999999']],
     'entity' => [['entity' => '99999']],
 ]);
+
+it('accepts an amount as a JSON float or with trailing zeros, and a reference with spaces', function (array $overrides) {
+    $attempt = attempt(['reference' => '123456789']);
+
+    deliver(payload($attempt, $overrides))->assertOk();
+
+    expect($attempt->refresh()->status)->toBe(AttemptStatus::Paid)
+        ->and(handler()->received)->toHaveCount(1);
+})->with([
+    'float' => [['amount' => ['value' => 12.5, 'currency' => 'EUR']]],
+    'trailing zeros' => [['amount' => ['value' => '12.500', 'currency' => 'EUR']]],
+    'spaced reference' => [['reference' => '123 456 789']],
+]);
+
+it('marks the attempt paid without a transaction id, using the identifier downstream', function () {
+    $attempt = attempt();
+    $payload = payload($attempt);
+    unset($payload['transaction']['trid']);
+
+    deliver($payload)->assertOk();
+
+    $attempt->refresh();
+    expect($attempt->status)->toBe(AttemptStatus::Paid)
+        ->and($attempt->trid)->toBeNull()
+        ->and(handler()->received[0][1]->trid)->toBe($attempt->identifier);
+});
+
+it('keeps an already paid attempt when a second payment arrives, and notes it', function () {
+    $attempt = attempt();
+    deliver(payload($attempt))->assertOk();
+
+    deliver(payload($attempt, ['trid' => '1111111']))->assertOk();
+
+    $second = PaymentWebhookEvent::query()->latest('id')->first();
+    expect($second?->status)->toBe(EventStatus::Processed)
+        ->and($second?->error_message)->toBe('The attempt was already paid with a different transaction.')
+        ->and($attempt->refresh()->trid)->toBe('7654321')
+        ->and(handler()->received)->toHaveCount(1);
+});
 
 it('completes an unknown attempt with the reference from the payment', function () {
     $attempt = attempt(['status' => AttemptStatus::Unknown, 'reference' => null, 'entity' => null]);
@@ -152,6 +194,19 @@ it('marks the attempt paid for review when the handler cannot receive it', funct
         ->and(handler()->received)->toBe([]);
     Event::assertDispatched(PaymentNeedsReview::class);
     Event::assertNotDispatched(PaymentConfirmed::class);
+});
+
+it('marks paid an unknown attempt that expired, with the reference from the payment', function () {
+    $attempt = attempt(['status' => AttemptStatus::Unknown, 'reference' => null, 'entity' => null, 'expires_at' => now()->subMinute()]);
+    Artisan::call('eupago:expire');
+    expect($attempt->refresh()->status)->toBe(AttemptStatus::Expired);
+
+    deliver(payload($attempt, ['reference' => '800000001', 'entity' => '12345']))->assertOk();
+
+    $attempt->refresh();
+    expect($attempt->status)->toBe(AttemptStatus::Paid)
+        ->and($attempt->reference)->toBe('800000001')
+        ->and(handler()->received)->toHaveCount(1);
 });
 
 it('marks an expired attempt paid', function () {
@@ -181,7 +236,20 @@ it('waits while the attempt is still being created', function () {
         ->and($attempt->refresh()->status)->toBe(AttemptStatus::Creating);
 });
 
+it('keeps the event pending and the attempt unchanged without a bound handler', function () {
+    app()->forgetInstance(HandlesEupagoPayments::class);
+    app()->offsetUnset(HandlesEupagoPayments::class);
+    $attempt = attempt();
+    $event = storedEvent($attempt, payload($attempt));
+
+    expect(fn () => (new ProcessWebhookEvent($event))->handle())->toThrow(RuntimeException::class)
+        ->and($event->refresh()->status)->toBe(EventStatus::Pending)
+        ->and($event->error_message)->toContain(HandlesEupagoPayments::class)
+        ->and($attempt->refresh()->status)->toBe(AttemptStatus::Pending);
+});
+
 it('rolls back and retries when the handler fails', function () {
+    Event::fake([PaymentConfirmed::class]);
     $attempt = attempt();
     $event = storedEvent($attempt, payload($attempt));
     handler()->throws = new RuntimeException('The order is locked.');
@@ -190,6 +258,7 @@ it('rolls back and retries when the handler fails', function () {
         ->and($attempt->refresh()->status)->toBe(AttemptStatus::Pending)
         ->and($event->refresh()->status)->toBe(EventStatus::Pending)
         ->and($event->error_message)->toBe('The order is locked.');
+    Event::assertNotDispatched(PaymentConfirmed::class);
 
     handler()->throws = null;
     (new ProcessWebhookEvent($event))->handle();
@@ -213,3 +282,12 @@ it('closes a pending attempt that EuPago expires or cancels, and leaves a paid o
         ->and(handler()->expired)->toBe([$pending->id]);
     Event::assertDispatchedTimes(PaymentAttemptExpired::class, 1);
 })->with(['Expired', 'Canceled']);
+
+it('fails an open attempt on an error', function () {
+    $attempt = attempt();
+
+    deliver(payload($attempt, ['status' => 'Error']))->assertOk();
+
+    expect($attempt->refresh()->status)->toBe(AttemptStatus::Failed)
+        ->and(handler()->expired)->toBe([$attempt->id]);
+});

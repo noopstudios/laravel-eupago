@@ -18,7 +18,7 @@ class RecoverCommand extends Command
 {
     private const CREATING_MINUTES = 2;
 
-    private const PENDING_MINUTES = 5;
+    private const PENDING_MINUTES = 15;
 
     protected $signature = 'eupago:recover';
 
@@ -36,7 +36,8 @@ class RecoverCommand extends Command
 
         PaymentWebhookEvent::query()
             ->where('status', EventStatus::Pending)
-            ->where('created_at', '<', now()->subMinutes(self::PENDING_MINUTES))
+            // Last touched, so an event that keeps failing is not queued again on top of its job's backoff.
+            ->where('updated_at', '<', now()->subMinutes(self::PENDING_MINUTES))
             ->lazyById()
             ->each(function (PaymentWebhookEvent $event) use (&$count, &$failed) {
                 try {

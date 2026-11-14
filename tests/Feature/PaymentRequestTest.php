@@ -161,14 +161,21 @@ it('marks an explicit refusal as failed without blocking the next request or lea
 
 it('blocks once the payable reached max_attempts', function () {
     config(['eupago.max_attempts' => 2]);
-    Http::fake();
+    Http::fake(['*' => multibancoOk()]);
     $order = Order::create();
-    // Refusals that never produced a reference do not count.
-    PaymentAttempt::factory()->for($order, 'payable')->status(AttemptStatus::Failed)->count(3)->create(['reference' => null]);
-    PaymentAttempt::factory()->for($order, 'payable')->status(AttemptStatus::Expired)->count(2)->create();
+    $refused = fn (int $count, int $minutesAgo) => PaymentAttempt::factory()->for($order, 'payable')->status(AttemptStatus::Failed)
+        ->count($count)->create(['reference' => null, 'created_at' => now()->subMinutes($minutesAgo)]);
 
-    expect(failure(fn () => Eupago::multibanco($order, 1234))->type)->toBe(FailureType::Blocked);
-    Http::assertNothingSent();
+    // Refusals without a reference stop counting after 15 minutes...
+    $refused(3, 16);
+    PaymentAttempt::factory()->for($order, 'payable')->status(AttemptStatus::Expired)->create();
+    expect(Eupago::multibanco($order, 1234)->status)->toBe(AttemptStatus::Pending);
+
+    // ...but recent ones count.
+    $other = Order::create();
+    PaymentAttempt::factory()->for($other, 'payable')->status(AttemptStatus::Failed)->count(2)->create(['reference' => null]);
+    expect(failure(fn () => Eupago::multibanco($other, 1234))->type)->toBe(FailureType::Blocked);
+    Http::assertSentCount(1);
 });
 
 it('blocks without creating anything while another request holds the payable lock', function () {

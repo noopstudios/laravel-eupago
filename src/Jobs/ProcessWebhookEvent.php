@@ -67,7 +67,9 @@ class ProcessWebhookEvent implements ShouldQueue
         try {
             DB::transaction(fn () => $this->process($event->id, $attempt->id));
         } catch (Throwable $e) {
-            $event->update(['error_message' => $e->getMessage()]);
+            // Only while still pending: a concurrent duplicate job may have processed it meanwhile.
+            PaymentWebhookEvent::query()->whereKey($event->id)->where('status', EventStatus::Pending)
+                ->update(['error_message' => $e->getMessage()]);
 
             throw $e;
         }
@@ -128,6 +130,11 @@ class ProcessWebhookEvent implements ShouldQueue
             'error_message' => $note,
             'processed_at' => now(),
         ]);
+
+        if ($status === 'PAID' && $outcome === EventStatus::Rejected) {
+            // Money may have been received: tell someone. Only the event id and the generic reason.
+            report(new RuntimeException("EuPago webhook event {$event->id} was rejected: {$note}"));
+        }
     }
 
     /**
@@ -137,35 +144,32 @@ class ProcessWebhookEvent implements ShouldQueue
     private function paid(PaymentAttempt $attempt, array $transaction): array
     {
         $amount = is_array($transaction['amount'] ?? null) ? $transaction['amount']['value'] ?? null : null;
-        $reference = self::string($transaction['reference'] ?? null);
-        $entity = self::string($transaction['entity'] ?? null);
+        $reference = self::compact($transaction['reference'] ?? null);
+        $entity = self::compact($transaction['entity'] ?? null);
         $trid = self::string($transaction['trid'] ?? null);
 
         if (self::cents($amount) !== $attempt->amount_cents) {
             return [EventStatus::Rejected, 'The paid amount does not match the attempt.'];
         }
 
-        if ($reference !== null && $attempt->reference !== null && $reference !== $attempt->reference) {
+        if ($reference !== null && $attempt->reference !== null && $reference !== self::compact($attempt->reference)) {
             return [EventStatus::Rejected, 'The reference does not match the attempt.'];
         }
 
-        if ($entity !== null && $attempt->entity !== null && $entity !== $attempt->entity) {
+        if ($entity !== null && $attempt->entity !== null && $entity !== self::compact($attempt->entity)) {
             return [EventStatus::Rejected, 'The entity does not match the attempt.'];
         }
 
         if ($attempt->status === AttemptStatus::Paid) {
-            return [EventStatus::Processed, null];
+            return [EventStatus::Processed, $trid !== null && $trid !== $attempt->trid ? 'The attempt was already paid with a different transaction.' : null];
         }
 
-        if ($attempt->status === AttemptStatus::Unknown) {
-            $attempt->reference ??= $reference;
-            $attempt->entity ??= $entity;
-        }
-
+        $attempt->reference ??= $reference;
+        $attempt->entity ??= $entity;
         $reference = $attempt->reference;
 
-        if ($reference === null || $trid === null) {
-            return [EventStatus::Rejected, 'The payment has no reference or transaction id.'];
+        if ($reference === null) {
+            return [EventStatus::Rejected, 'The payment has no reference.'];
         }
 
         $paidAt = self::paidAt($transaction['date'] ?? null);
@@ -174,7 +178,7 @@ class ProcessWebhookEvent implements ShouldQueue
         $handler = self::handler();
 
         if ($handler->canReceive($attempt)) {
-            $handler->received($attempt, new ConfirmedPayment($attempt->amount_cents, $trid, $attempt->method, $reference, $attempt->entity, $paidAt));
+            $handler->received($attempt, new ConfirmedPayment($attempt->amount_cents, $trid ?? $attempt->identifier, $attempt->method, $reference, $attempt->entity, $paidAt));
             event(new PaymentConfirmed($attempt));
         } else {
             event(new PaymentNeedsReview($attempt));
@@ -228,6 +232,16 @@ class ProcessWebhookEvent implements ShouldQueue
     private static function string(mixed $value): ?string
     {
         return (is_string($value) || is_int($value)) && $value !== '' ? (string) $value : null;
+    }
+
+    /**
+     * A reference or entity without whitespace, so "123 456 789" matches "123456789".
+     */
+    private static function compact(mixed $value): ?string
+    {
+        $value = self::string($value);
+
+        return $value === null ? null : (preg_replace('/\s+/', '', $value) ?: null);
     }
 
     /**

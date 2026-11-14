@@ -19,7 +19,7 @@ return new class extends Migration
             $table->timestamp('processed_at')->nullable();
             $table->timestamps();
 
-            $table->index(['status', 'created_at']);
+            $table->index(['status', 'updated_at']);
         });
     }
 
