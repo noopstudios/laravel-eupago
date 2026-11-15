@@ -20,13 +20,15 @@ class EupagoServiceProvider extends ServiceProvider
 
         $this->app->singleton(EupagoClient::class);
         $this->app->singleton(Eupago::class);
+
+        // In register(): a host that translates before this provider boots would cache the JSON lines without ours.
+        $this->loadJsonTranslationsFrom(__DIR__.'/../resources/lang');
     }
 
     public function boot(): void
     {
         $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
         $this->loadRoutesFrom(__DIR__.'/../routes/webhook.php');
-        $this->loadJsonTranslationsFrom(__DIR__.'/../resources/lang');
 
         // Explicit, so the models stay guarded when the host guesses policy names its own way;
         // a policy the host registered for a model is kept.
